@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""generate_package.py - Generate a publish package for a skill.
+"""generate_package.py - Generate a publish package for any Claude Code skill.
 
 Creates a directory with:
 - SKILL.md (copied from source)
-- README.md (bilingual EN/ZH)
-- examples/ (sample inputs and outputs)
+- README.md (bilingual EN/ZH, extracted from SKILL.md)
+- examples/ (copied from source)
 - .clawhub.json (ClawHub manifest)
 """
 
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import yaml
@@ -27,250 +28,171 @@ def copy_skill(source_dir, output_dir):
 
     shutil.copy2(src_skill, os.path.join(output_dir, "SKILL.md"))
 
-    # Copy scripts/ if present
     src_scripts = os.path.join(source_dir, "scripts")
     if os.path.isdir(src_scripts):
         dst_scripts = os.path.join(output_dir, "scripts")
         shutil.copytree(src_scripts, dst_scripts, dirs_exist_ok=True)
 
 
-def generate_readme(skill_path, output_path):
-    """Generate a bilingual README.md from SKILL.md."""
+def parse_skill(skill_path):
+    """Parse SKILL.md into frontmatter data and body sections."""
     with open(skill_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     parts = content.split("---", 2)
     if len(parts) < 3:
-        print("Error: Invalid SKILL.md format", file=sys.stderr)
+        print("Error: Invalid SKILL.md — missing YAML frontmatter", file=sys.stderr)
         sys.exit(1)
 
     data = yaml.safe_load(parts[1].strip())
     body = parts[2].strip()
+    return data, body
 
+
+def extract_sections(body):
+    """Split body into named sections for reuse in README."""
+    sections = {}
+    current_heading = None
+    current_lines = []
+
+    for line in body.split("\n"):
+        m = re.match(r"^(#{1,3})\s+(.+)", line)
+        if m:
+            if current_heading:
+                sections[current_heading] = "\n".join(current_lines).strip()
+            current_heading = m.group(2).strip().lower()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_heading:
+        sections[current_heading] = "\n".join(current_lines).strip()
+
+    return sections
+
+
+def find_section(sections, keywords):
+    """Find a section matching any of the keywords (case-insensitive partial match)."""
+    for heading, content in sections.items():
+        for kw in keywords:
+            if kw.lower() in heading.lower():
+                return content
+    return None
+
+
+def extract_examples_from_source(source_dir):
+    """List example files in the source skill directory."""
+    examples_dir = os.path.join(source_dir, "examples")
+    if not os.path.isdir(examples_dir):
+        return []
+    examples = []
+    for f in sorted(os.listdir(examples_dir)):
+        if f.endswith((".ascii", ".excalidraw", ".md", ".txt", ".png", ".jpg")):
+            examples.append(f)
+    return examples
+
+
+def generate_readme(data, body, sections, output_path):
+    """Generate a bilingual README.md from any skill's SKILL.md."""
     name = data.get("name", "skill")
     description = data.get("description", "")
     display_name = name.replace("-", " ").title()
 
-    readme = f"""# {display_name} / {display_name}
+    # Try to find overview/when-to-use content
+    overview = (
+        find_section(sections, ["when to use", "overview", "about"])
+        or "See SKILL.md for full documentation."
+    )
 
-> {description}
->
-> {description} (中文版)
+    # Try to find features section
+    features_content = (
+        find_section(sections, ["features", "capabilities", "functionality"])
+        or find_section(sections, ["pattern", "color"])
+        or find_section(sections, ["conversion", "workflow", "step"])
+    )
 
----
+    # Extract tables from sections if present (useful for config/color/palette sections)
+    tables = []
+    for heading, content in sections.items():
+        if any(kw in heading for kw in ["color", "palette", "config", "mapping"]):
+            table_lines = [l for l in content.split("\n") if l.strip().startswith("|")]
+            if table_lines:
+                tables.append((heading, "\n".join(table_lines)))
 
-## Table of Contents / 目录
+    # Find example references
+    examples = extract_examples_from_source(os.path.dirname(output_path).replace("/tmp/publish-" + name, os.path.join(os.path.expanduser("~"), ".skills", name)))
 
-1. [Overview / 概述](#overview--概述)
-2. [Quick Start / 快速开始](#quick-start--快速开始)
-3. [Examples / 示例](#examples--示例)
-4. [Features / 功能特性](#features--功能特性)
-5. [Configuration / 配置](#configuration--配置)
+    readme_parts = []
+    readme_parts.append(f"# {display_name} / {display_name}")
+    readme_parts.append("")
+    readme_parts.append(f"> {description}")
+    readme_parts.append("")
+    readme_parts.append("---")
+    readme_parts.append("")
+    readme_parts.append("## Overview / 概述")
+    readme_parts.append("")
+    readme_parts.append(overview)
+    readme_parts.append("")
+    readme_parts.append("---")
+    readme_parts.append("")
+    readme_parts.append("## Features / 功能特性")
+    readme_parts.append("")
+    if features_content:
+        readme_parts.append(features_content)
+    else:
+        readme_parts.append(f"See SKILL.md for details on {display_name}.")
+    readme_parts.append("")
 
----
+    for heading, table_content in tables:
+        readme_parts.append(f"### {heading}")
+        readme_parts.append("")
+        readme_parts.append(table_content)
+        readme_parts.append("")
 
-## Overview / 概述
+    readme_parts.append("---")
+    readme_parts.append("")
+    readme_parts.append("## Quick Start / 快速开始")
+    readme_parts.append("")
+    readme_parts.append("### English")
+    readme_parts.append("")
+    readme_parts.append("1. Trigger the skill in Claude Code: `/ {name}`")
+    readme_parts.append("2. Follow the interactive prompts")
+    readme_parts.append("")
+    readme_parts.append("### 中文")
+    readme_parts.append("")
+    readme_parts.append("1. 在 Claude Code 中触发技能：`/ {name}`")
+    readme_parts.append("2. 按照交互提示操作")
+    readme_parts.append("")
 
-{display_name} is a Claude Code skill that helps you create professional diagrams and visualizations.
+    if examples:
+        readme_parts.append("---")
+        readme_parts.append("")
+        readme_parts.append("## Examples / 示例")
+        readme_parts.append("")
+        readme_parts.append("Example files are included in the `examples/` directory.")
+        readme_parts.append("")
+        readme_parts.append("示例文件位于 `examples/` 目录中。")
+        readme_parts.append("")
 
-{display_name} 是一个 Claude Code 技能，帮助你创建专业的图表和可视化内容。
-
-### What it does / 功能说明
-
-{get_overview_body(body)}
-
----
-
-## Quick Start / 快速开始
-
-### English
-
-1. Make sure you have Claude Code installed and configured
-2. The skill will be automatically available as `/ {name}`
-3. Use it by describing your diagram or providing an ASCII sketch
-4. The skill generates a `.excalidraw` file you can open at excalidraw.com
-
-### 中文
-
-1. 确保已安装并配置 Claude Code
-2. 技能会自动作为 `/ {name}` 可用
-3. 通过描述你的图表或提供 ASCII 草图来使用它
-4. 技能会生成 `.excalidraw` 文件，可在 excalidraw.com 打开
-
----
-
-## Examples / 示例
-
-### Example 1: Architecture Diagram / 示例一：架构图
-
-**Input (ASCII) / 输入：**
-
-```
-────────────┐      ┌──────────────
-│   Web App  │─────▶│  API Server  │
-└────────────      └──────────────┘
-                           │
-                     ┌─────▼─────┐
-                     │ Database  │
-                     └───────────┘
-```
-
-**Output / 输出：**
-
-The skill generates a colorful, hand-drawn style Excalidraw diagram with:
-- Color-coded components (blue for frontend, violet for backend, green for database)
-- Arrow connections with proper binding
-- Hachure fill style for the sketch aesthetic
-
-技能生成色彩丰富、手绘风格的 Excalidraw 图表：
-- 按组件类型着色（前端蓝色、后端紫色、数据库绿色）
-- 带绑定的箭头连接
-- hachure 填充风格呈现草图美学
-
-### Example 2: Flow Diagram / 示例二：流程图
-
-**Input (ASCII) / 输入：**
-
-```
-┌──────────┐    ┌────────────┐    ┌──────────┐
-│  Start   │───▶│  Process   │───▶│   End    │
-└──────────┘    └────────────┘    └──────────┘
-                       │
-                 ┌─────▼─────┐
-                 │  Error    │
-                 ───────────┘
-```
-
-**Output / 输出：**
-
-A flowchart with decision nodes, process steps, and error handling paths,
-all rendered in Excalidraw's signature hand-drawn style.
-
-包含决策节点、处理步骤和错误处理路径的流程图，
-全部以 Excalidraw 标志性的手绘风格渲染。
-
----
-
-## Features / 功能特性
-
-{extract_features(body)}
-
----
-
-## Configuration / 配置
-
-### Color Palette / 颜色方案
-
-{get_color_table()}
-
----
-
-## Troubleshooting / 故障排除
-
-| Problem / 问题 | Solution / 解决方案 |
-|---|---|
-| Skill not showing up | Restart Claude Code / 重启 Claude Code |
-| Diagram looks cramped | The skill auto-calculates spacing; try again / 技能会自动计算间距，重试即可 |
-| Colors look wrong | Check component name keywords for color matching / 检查组件名称关键词以匹配颜色 |
-
----
-
-## Contributing / 贡献
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create your feature branch
-3. Submit a pull request
-
-欢迎贡献！请：
-1. Fork 仓库
-2. 创建你的功能分支
-3. 提交 pull request
-
----
-
-## License / 许可
-
-{data.get("license", "MIT")}
-
----
-
-*Generated by skill-publisher*
-"""
+    readme_parts.append("---")
+    readme_parts.append("")
+    readme_parts.append("## License / 许可")
+    readme_parts.append("")
+    readme_parts.append(data.get("license", "MIT"))
+    readme_parts.append("")
+    readme_parts.append("---")
+    readme_parts.append("")
+    readme_parts.append("*Generated by skill-publisher*")
+    readme_parts.append("")
 
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(readme)
+        f.write("\n".join(readme_parts))
 
     print(f"Generated README.md at {output_path}")
 
 
-def get_overview_body(body):
-    """Extract the main overview content from the skill body."""
-    lines = body.strip().split("\n")
-    result = []
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## When to Use") or stripped.startswith("## Workflow"):
-            in_section = True
-        if in_section and stripped.startswith("## ") and not stripped.startswith("## When") and not stripped.startswith("## Workflow"):
-            break
-        if in_section:
-            result.append(line)
-    if not result:
-        return "See SKILL.md for full documentation."
-    return "\n".join(result[:30])
-
-
-def extract_features(body):
-    """Extract feature list from SKILL.md body."""
-    features = []
-    lines = body.strip().split("\n")
-    in_features = False
-    for line in lines:
-        stripped = line.strip()
-        if "ASCII Pattern Mapping" in stripped or "Color Assignment" in stripped:
-            in_features = True
-        if in_features and stripped.startswith("## ") and "ASCII Pattern" not in stripped and "Color Assignment" not in stripped:
-            break
-        if in_features and stripped.startswith("|"):
-            features.append(line)
-    if features:
-        return "\n" + "\n".join(features[:15])
-    return "- ASCII diagram parsing / ASCII 图解析\n- Module-by-module JSON generation / 逐模块 JSON 生成\n- Semantic color assignment / 语义颜色分配\n- Hand-drawn sketch style / 手绘草图风格\n- Multi-platform publishing support / 多平台发布支持"
-
-
-def get_color_table():
-    """Return the color palette table."""
-    return """| Component / 组件 | Fill / 填充色 | Stroke / 描边色 |
-|---|---|---|
-| Frontend / 前端 | `#a5d8ff` (light blue) | `#1971c2` (blue) |
-| Backend / 后端 | `#d0bfff` (light violet) | `#7048e8` (violet) |
-| Database / 数据库 | `#b2f2bb` (light green) | `#2f9e44` (green) |
-| External / 外部服务 | `#ffc9c9` (light red) | `#e03131` (red) |
-| Queue / 消息队列 | `#fff3bf` (light yellow) | `#f08c00` (orange) |
-| AI/ML | `#eebefa` (light grape) | `#9c36b5` (grape) |
-| Auth / 认证 | `#c3fae8` (light teal) | `#087f5b` (teal) |
-| Monitoring / 监控 | `#fcc2d7` (light pink) | `#e64980` (pink) |"""
-
-
-def copy_examples(source_dir, output_dir):
-    """Copy example files if they exist."""
-    examples_src = os.path.join(source_dir, "examples")
-    if os.path.isdir(examples_src):
-        examples_dst = os.path.join(output_dir, "examples")
-        shutil.copytree(examples_src, examples_dst, dirs_exist_ok=True)
-        print(f"Copied examples from {examples_src}")
-
-
-def generate_clawhub_manifest(skill_path, output_path):
+def generate_clawhub_manifest(data, output_path):
     """Generate .clawhub.json manifest for ClawHub."""
-    with open(skill_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    parts = content.split("---", 2)
-    data = yaml.safe_load(parts[1].strip())
-
     manifest = {
         "name": data.get("name", ""),
         "description": data.get("description", ""),
@@ -287,7 +209,7 @@ def generate_clawhub_manifest(skill_path, output_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate a publish package for a Claude Code skill"
+        description="Generate a publish package for any Claude Code skill"
     )
     parser.add_argument("--source", required=True, help="Path to the source skill directory")
     parser.add_argument("--output", required=True, help="Output directory for the publish package")
@@ -302,22 +224,29 @@ def main():
     print(f"Platforms: {', '.join(args.platforms)}")
     print()
 
+    # Parse source skill
+    src_skill = os.path.join(args.source, "SKILL.md")
+    data, body = parse_skill(src_skill)
+    sections = extract_sections(body)
+
     # Step 1: Copy skill files
     copy_skill(args.source, args.output)
 
-    # Step 2: Generate README
-    src_skill = os.path.join(args.source, "SKILL.md")
-    generate_readme(src_skill, os.path.join(args.output, "README.md"))
+    # Step 2: Generate bilingual README
+    generate_readme(data, body, sections, os.path.join(args.output, "README.md"))
 
     # Step 3: Copy examples
-    if args.examples_dir:
-        copy_examples(args.examples_dir, args.output)
+    examples_src = args.examples_dir or os.path.join(args.source, "examples")
+    if os.path.isdir(examples_src):
+        examples_dst = os.path.join(args.output, "examples")
+        shutil.copytree(examples_src, examples_dst, dirs_exist_ok=True)
+        print(f"Copied examples from {examples_src}")
 
-    # Step 4: Generate ClawHub manifest if targeting ClawHub
+    # Step 4: Generate ClawHub manifest
     if "clawhub" in args.platforms:
-        generate_clawhub_manifest(src_skill, os.path.join(args.output, ".clawhub.json"))
+        generate_clawhub_manifest(data, os.path.join(args.output, ".clawhub.json"))
 
-    # Step 5: Copy screenshots if provided
+    # Step 5: Copy screenshots
     if args.screenshots and os.path.isdir(args.screenshots):
         screenshots_dst = os.path.join(args.output, "screenshots")
         shutil.copytree(args.screenshots, screenshots_dst, dirs_exist_ok=True)
@@ -327,11 +256,11 @@ def main():
     print(f"\nPublish package ready at: {args.output}")
     print("\nNext steps:")
     if "clawhub" in args.platforms:
-        print("  ClawHub:  cd {} && clawhub publish .".format(args.output))
+        print("  ClawHub:    cd {} && clawhub publish .".format(args.output))
     if "hermes" in args.platforms:
-        print("  Hermes:   Copy SKILL.md to skills/creative/<name>/ in NousResearch/hermes-agent fork")
+        print("  Hermes:     Copy SKILL.md to skills/creative/<name>/ in NousResearch/hermes-agent fork")
     if "anthropics" in args.platforms:
-        print("  Anthropic: Copy SKILL.md to skills/<name>/ in anthropics/skills fork")
+        print("  Anthropic:  Copy SKILL.md to skills/<name>/ in anthropics/skills fork")
 
 
 if __name__ == "__main__":
