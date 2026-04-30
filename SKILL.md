@@ -28,24 +28,19 @@ Before using this skill, check for the following in the environment (or ask the 
 
 ### Authentication
 
-| Token | Purpose | Env Var |
+These tokens are pre-configured in `~/.env` and shell environment. Read them automatically — do not ask the user:
+
+| Token | Env Var | Source |
 |---|---|---|
-| GitHub PAT | GitHub API calls | `GITHUB_TOKEN` |
-| ClawHub token | `clawhub publish` | `CLAWHUB_TOKEN` |
+| GitHub PAT | `GITHUB_TOKEN` | `~/.env` or env |
+| GitHub user | `GITHUB_USER` | `~/.env` or env |
+| ClawHub token | `CLAWHUB_TOKEN` | `~/.env` or env |
 
-Tokens can be in env vars, a `.env` file, or provided interactively.
+If a variable is missing, read `~/.env` first, then ask the user.
 
-### Proxy (if needed)
+### Proxy
 
-If `api.github.com` is blocked, set:
-
-```bash
-export https_proxy=http://<proxy-ip>:<port>
-```
-
-Per-command: `curl -x http://<proxy>`, `git -c http.proxy=http://<proxy>`, `https_proxy=http://<proxy> clawhub publish`
-
-**Note:** SSH git (`git@github.com:...`) works without proxy on port 22.
+A proxy is pre-configured (`https_proxy`, `http_proxy` in `~/.env`). Use it automatically for all GitHub API and HTTPS calls. SSH (`git@github.com:...`) works without proxy on port 22.
 
 ## Workflow
 
